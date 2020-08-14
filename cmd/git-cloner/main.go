@@ -1,10 +1,9 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
@@ -12,7 +11,25 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	"github.com/gorilla/sessions"
 	"github.com/joho/godotenv"
+	"golang.org/x/oauth2"
+)
+
+const sessionStoreKey = "sess"
+
+const (
+	defaultConfigFile = "config.json"
+
+	githubAuthorizeUrl = "https://github.com/login/oauth/authorize"
+	githubTokenUrl     = "https://github.com/login/oauth/access_token"
+	redirectUrl        = ""
+)
+
+var (
+	oauthCfg *oauth2.Config
+	scopes   = []string{"repo"}
+	store    *sessions.CookieStore
 )
 
 const defaultAddr = ":8081"
@@ -22,6 +39,18 @@ var directory = ""
 
 func main() {
 	err := godotenv.Load()
+	oauthCfg = &oauth2.Config{
+		ClientID:     os.Getenv("client_id"),
+		ClientSecret: os.Getenv("client_secret"),
+		Endpoint: oauth2.Endpoint{
+			AuthURL:  githubAuthorizeUrl,
+			TokenURL: githubTokenUrl,
+		},
+		RedirectURL: redirectUrl,
+		Scopes:      scopes,
+	}
+	store = sessions.NewCookieStore([]byte(os.Getenv("serverSecret")))
+
 	if err != nil {
 		Info("Not able to read the configuration")
 		return
@@ -70,36 +99,51 @@ func callback(w http.ResponseWriter, r *http.Request) {
 	header, _ := url.ParseQuery(u.RawQuery)
 	fmt.Println(header["code"][0])
 
-	values := map[string]string{
-		"client_id":     os.Getenv("client_id"),
-		"client_secret": os.Getenv("client_secret"),
-		"code":          header["code"][0],
-		"redirect_uri":  "http://" + r.Host + "/token",
+	// values := map[string]string{
+	// 	"client_id":     os.Getenv("client_id"),
+	// 	"client_secret": os.Getenv("client_secret"),
+	// 	"code":          header["code"][0],
+	// 	"redirect_uri":  "http://" + r.Host + "/token",
+	// }
+
+	// jsonValue, _ := json.Marshal(values)
+
+	token, err := oauthCfg.Exchange(oauth2.NoContext, r.URL.Query().Get("code"))
+	if err != nil {
+		fmt.Fprintln(w, "there was an issue getting your token")
+		return
 	}
 
-	jsonValue, _ := json.Marshal(values)
-
-	result, _ := http.Post("https://github.com/login/oauth/access_token",
-		"application/json", bytes.NewBuffer(jsonValue))
-	defer result.Body.Close()
-	body, _ := ioutil.ReadAll(result.Body)
-
-	tokenURL := "http://" + r.Host + "/token?" + string(body)
-	http.Redirect(w, r, tokenURL, http.StatusTemporaryRedirect)
+	if !token.Valid() {
+		fmt.Fprintln(w, "retreived invalid token")
+		return
+	}
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
-	var oauth2Endpoint = "https://github.com/login/oauth/authorize"
-	req, _ := http.NewRequest("GET", oauth2Endpoint, nil)
-	req.Header.Add("Accept", "application/json")
-	q := req.URL.Query()
-	q.Add("client_id", os.Getenv("client_id"))
-	q.Add("redirect_uri", "http://"+r.Host+"/callback")
-	q.Add("scope", "public_repo")
-	q.Add("include_granted_scopes", "true")
+	// var oauth2Endpoint = "https://github.com/login/oauth/authorize"
+	// req, _ := http.NewRequest("GET", oauth2Endpoint, nil)
+	// req.Header.Add("Accept", "application/json")
+	// q := req.URL.Query()
+	// q.Add("client_id", os.Getenv("client_id"))
+	// q.Add("redirect_uri", "http://"+r.Host+"/callback")
+	// q.Add("scope", "public_repo")
+	// q.Add("include_granted_scopes", "true")
 
-	req.URL.RawQuery = q.Encode()
+	// req.URL.RawQuery = q.Encode()
 	giturl = r.FormValue("giturl")
 	directory = r.FormValue("directory")
-	http.Redirect(w, r, req.URL.String(), http.StatusTemporaryRedirect)
+	// http.Redirect(w, r, req.URL.String(), http.StatusFound)
+
+	b := make([]byte, 16)
+	rand.Read(b)
+
+	state := base64.URLEncoding.EncodeToString(b)
+
+	session, _ := store.Get(r, sessionStoreKey)
+	session.Values["state"] = state
+	session.Save(r, w)
+
+	url := oauthCfg.AuthCodeURL("sdgasdg")
+	http.Redirect(w, r, url, 302)
 }
