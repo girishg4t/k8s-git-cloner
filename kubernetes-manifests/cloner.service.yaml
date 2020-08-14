@@ -1,0 +1,17 @@
+# This Service manifest defines:
+# - a load balancer for pods matching label "app: go-git-cloner"
+# - exposing the application to the public Internet (type:LoadBalancer)
+# - routes port 80 of the load balancer to the port 8081 of the Pods.
+# Syntax reference https://kubernetes.io/docs/concepts/configuration/overview/
+apiVersion: v1
+kind: Service
+metadata:
+  name: go-git-cloner-external
+spec:
+  type: LoadBalancer
+  selector:
+    app: go-git-cloner
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8081
