@@ -3,6 +3,9 @@ package main
 import (
 	"fmt"
 	"os"
+
+	git "github.com/go-git/go-git/v5"
+	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 )
 
 // CheckIfError should be used to naively panics if an error is not nil.
@@ -23,4 +26,19 @@ func Info(format string, args ...interface{}) {
 // Warning should be used to display a warning
 func Warning(format string, args ...interface{}) {
 	fmt.Printf("\x1b[36;1m%s\x1b[0m\n", fmt.Sprintf(format, args...))
+}
+
+func cloneRepo(token string) {
+
+	Info("git clone %s %s", giturl, directory)
+
+	_, err := git.PlainClone(directory, false, &git.CloneOptions{
+		Auth: &githttp.BasicAuth{
+			Username: "girishg4t",
+			Password: token,
+		},
+		URL:      giturl,
+		Progress: os.Stdout,
+	})
+	CheckIfError(err)
 }
