@@ -15,7 +15,7 @@ const form = `
 	<body style="background-color:black;color:white;">
 
 		<main class="col-md-6 col-md-offset-3">
-			<form action="clone" method="POST">
+			<form action="/submit" method="POST">
 
 				<div class="form-group" style="text-align:center;">
 					<BR><BR><H1>Github repo cloner</H1><BR><BR>
@@ -29,10 +29,10 @@ const form = `
 					<input type="text" name="directory" id="directory" value="%v" class="form-control">
 				</div>
 				<div class="form-group">	
-					<input type="submit" value="Clone" style="color: black; background-color: white; font-weight: bold;">
+					<input type="submit" formaction="/clone" value="Clone" name="value" style="color: black; background-color: white; font-weight: bold;">					
+					<input type="submit"  formaction="/clear" value="Clear" name="value" style="color: black; background-color: white; font-weight: bold;">
 				</div>
 			</form>
-
 			<div>
 				<H1><BR><BR>
 					Result: %v %v %v %v %v

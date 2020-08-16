@@ -3,10 +3,10 @@ package main
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/gob"
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 
 	git "github.com/go-git/go-git/v5"
@@ -28,7 +28,7 @@ const (
 
 var (
 	oauthCfg *oauth2.Config
-	scopes   = []string{"repo"}
+	scopes   = []string{"public_repo"}
 	store    *sessions.CookieStore
 )
 
@@ -52,7 +52,7 @@ func main() {
 	store = sessions.NewCookieStore([]byte(os.Getenv("serverSecret")))
 
 	if err != nil {
-		Info("Not able to read the configuration")
+		Info("Not able to read the configuration %s", err)
 		return
 	}
 	addr := defaultAddr
@@ -60,53 +60,58 @@ func main() {
 		addr = ":" + p
 	}
 	log.Printf("server starting to listen on %s", addr)
-	http.HandleFunc("/clone", handler)
+	http.HandleFunc("/clone", cloneHandler)
+	http.HandleFunc("/clear", clearSession)
 	http.HandleFunc("/callback", callback)
-	http.HandleFunc("/token", handleTokenCallback)
 	http.HandleFunc("/", view)
 	if err := http.ListenAndServe(addr, nil); err != nil {
 		Info("server listen error: %+v", err)
 	}
 }
 
-func handleTokenCallback(w http.ResponseWriter, r *http.Request) {
-	u, _ := url.Parse(r.URL.String())
-	fmt.Println(u.RawQuery)
-	header, _ := url.ParseQuery(u.RawQuery)
-	fmt.Println(header["access_token"][0])
+func cloneRepo(token string) {
 
 	Info("git clone %s %s", giturl, directory)
 
 	_, err := git.PlainClone(directory, false, &git.CloneOptions{
 		Auth: &githttp.BasicAuth{
 			Username: "girishg4t",
-			Password: header["access_token"][0],
+			Password: token,
 		},
 		URL:      giturl,
 		Progress: os.Stdout,
 	})
 	CheckIfError(err)
-	fmt.Fprintf(w, form, "", "", "", "", "", "", "Done")
 }
+
 func view(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, form, "", "", "", "", "", "", "")
 }
 
+func clearSession(w http.ResponseWriter, r *http.Request) {
+	session, err := store.Get(r, sessionStoreKey)
+	if err != nil {
+		fmt.Fprintln(w, "aborted")
+		return
+	}
+
+	session.Options.MaxAge = -1
+
+	session.Save(r, w)
+	http.Redirect(w, r, "/", 302)
+}
+
 func callback(w http.ResponseWriter, r *http.Request) {
-	fmt.Println(r.Host)
-	u, _ := url.Parse(r.URL.String())
-	fmt.Println(u.RawQuery)
-	header, _ := url.ParseQuery(u.RawQuery)
-	fmt.Println(header["code"][0])
+	session, err := store.Get(r, sessionStoreKey)
+	if err != nil {
+		fmt.Fprintln(w, "aborted")
+		return
+	}
 
-	// values := map[string]string{
-	// 	"client_id":     os.Getenv("client_id"),
-	// 	"client_secret": os.Getenv("client_secret"),
-	// 	"code":          header["code"][0],
-	// 	"redirect_uri":  "http://" + r.Host + "/token",
-	// }
-
-	// jsonValue, _ := json.Marshal(values)
+	if r.URL.Query().Get("state") != session.Values["state"] {
+		fmt.Fprintln(w, "no state match; possible csrf OR cookies not enabled")
+		return
+	}
 
 	token, err := oauthCfg.Exchange(oauth2.NoContext, r.URL.Query().Get("code"))
 	if err != nil {
@@ -118,32 +123,46 @@ func callback(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "retreived invalid token")
 		return
 	}
-}
-
-func handler(w http.ResponseWriter, r *http.Request) {
-	// var oauth2Endpoint = "https://github.com/login/oauth/authorize"
-	// req, _ := http.NewRequest("GET", oauth2Endpoint, nil)
-	// req.Header.Add("Accept", "application/json")
-	// q := req.URL.Query()
-	// q.Add("client_id", os.Getenv("client_id"))
-	// q.Add("redirect_uri", "http://"+r.Host+"/callback")
-	// q.Add("scope", "public_repo")
-	// q.Add("include_granted_scopes", "true")
-
-	// req.URL.RawQuery = q.Encode()
-	giturl = r.FormValue("giturl")
-	directory = r.FormValue("directory")
-	// http.Redirect(w, r, req.URL.String(), http.StatusFound)
-
-	b := make([]byte, 16)
-	rand.Read(b)
-
-	state := base64.URLEncoding.EncodeToString(b)
-
-	session, _ := store.Get(r, sessionStoreKey)
-	session.Values["state"] = state
+	session.Values["githubAccessToken"] = token
 	session.Save(r, w)
 
-	url := oauthCfg.AuthCodeURL("sdgasdg")
-	http.Redirect(w, r, url, 302)
+	cloneRepo(token.AccessToken)
+	fmt.Fprintf(w, form, "", "", "", "", "", "", "Done")
+
+}
+
+func cloneHandler(w http.ResponseWriter, r *http.Request) {
+	session, err := store.Get(r, sessionStoreKey)
+	setUIValues(r)
+	if err != nil {
+		fmt.Fprintln(w, err)
+		return
+	}
+
+	if accessToken, ok := session.Values["githubAccessToken"].(*oauth2.Token); ok {
+		cloneRepo(accessToken.AccessToken)
+		fmt.Fprintf(w, form, "", "", "", "", "", "", "Done")
+	} else {
+
+		b := make([]byte, 16)
+		rand.Read(b)
+
+		state := base64.URLEncoding.EncodeToString(b)
+
+		session, _ := store.Get(r, sessionStoreKey)
+		session.Values["state"] = state
+		session.Save(r, w)
+
+		url := oauthCfg.AuthCodeURL(state)
+		http.Redirect(w, r, url, 302)
+	}
+}
+
+func init() {
+	gob.Register(&oauth2.Token{})
+}
+
+func setUIValues(r *http.Request) {
+	giturl = r.FormValue("giturl")
+	directory = r.FormValue("directory")
 }
